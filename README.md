@@ -85,4 +85,4 @@ Beenden
 
 ## Lizenz
 
-MIT
+GPLv3
