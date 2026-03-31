@@ -1,6 +1,7 @@
 # Strompreis Menubar App
 
-Eine macOS Menubar-Applikation, die den aktuellen Börsenstrompreis für Deutschland alle 15 Minuten aktualisiert.
+Eine macOS Menubar-Applikation, die den aktuellen Börsenstrompreis für Deutschland anzeigt.
+Der Preis wird beim Start geladen und danach automatisch zur vollen Stunde aktualisiert, sobald der angezeigte Preis seine Gültigkeit verliert.
 
 ## Datenquelle
 

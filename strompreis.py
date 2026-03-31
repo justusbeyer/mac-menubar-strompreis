@@ -2,14 +2,26 @@
 """
 Strompreis Menubar App für macOS
 Zeigt den aktuellen Börsenstrompreis für Deutschland (EPEX Spot) in der Menüleiste an.
+Der Preis wird beim Start geladen und danach jeweils zur vollen Stunde aktualisiert,
+wenn der angezeigte Preis seine Gültigkeit verliert.
 Datenquelle: aWATTar API (kostenlos, keine Registrierung nötig)
 """
 
 import rumps
 import requests
+import logging
+import threading
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import time
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 API_URL = "https://api.awattar.de/v1/marketdata"
@@ -24,7 +36,8 @@ VAT_FACTOR = 1.19             # Mehrwertsteuer 19 %
 def get_current_market_price():
     """
     Ruft den aktuellen stündlichen Börsenpreis von der aWATTar-API ab.
-    Gibt den Preis in ct/kWh zurück (Bruttopreis inkl. Aufschlägen).
+    Gibt Nettopreis (ct/kWh), Bruttopreis (ct/kWh), Gültigkeitsende als
+    Zeitstring sowie den End-Timestamp in Millisekunden zurück.
     """
     now_ms = int(time.time() * 1000)
     params = {
@@ -32,11 +45,12 @@ def get_current_market_price():
         "end":   now_ms + 3600 * 1000,  # eine Stunde voraus
     }
     resp = requests.get(API_URL, params=params, timeout=10)
+    logger.info("GET %s – HTTP %s", API_URL, resp.status_code)
     resp.raise_for_status()
     data = resp.json().get("data", [])
 
     if not data:
-        return None, None, None
+        return None, None, None, None
 
     # Den Eintrag finden, in dessen Zeitfenster der aktuelle Zeitpunkt fällt
     for entry in data:
@@ -50,7 +64,7 @@ def get_current_market_price():
             valid_until = datetime.fromtimestamp(
                 entry["end_timestamp"] / 1000
             ).strftime("%H:%M")
-            return price_ct_kwh, price_gross, valid_until
+            return price_ct_kwh, price_gross, valid_until, entry["end_timestamp"]
 
     # Fallback: neuesten Eintrag nehmen
     entry = sorted(data, key=lambda x: x["start_timestamp"])[-1]
@@ -60,21 +74,10 @@ def get_current_market_price():
     valid_until = datetime.fromtimestamp(
         entry["end_timestamp"] / 1000
     ).strftime("%H:%M")
-    return price_ct_kwh, price_gross, valid_until
+    return price_ct_kwh, price_gross, valid_until, entry["end_timestamp"]
 
 
-def price_emoji(price_ct):
-    """Gibt ein Emoji abhängig vom Preisniveau zurück."""
-    if price_ct is None:
-        return "?"
-    if price_ct < 5:
-        return "green_circle"   # sehr günstig
-    elif price_ct < 15:
-        return "yellow_circle"  # normal
-    elif price_ct < 25:
-        return "orange_circle"  # teuer
-    else:
-        return "red_circle"     # sehr teuer
+RETRY_INTERVAL_S = 3 * 60  # Wartezeit nach einem fehlgeschlagenen API-Aufruf
 
 
 class StrompreisApp(rumps.App):
@@ -113,10 +116,43 @@ class StrompreisApp(rumps.App):
             self.quit_item,
         ]
 
-        # Sofort beim Start laden, dann alle 15 Minuten
+        self._expiry_timer = None  # einmaliger Timer zum Preisablauf
+        self._timer_lock = threading.Lock()  # schützt _expiry_timer vor Race Conditions
+
+        # Beim Start sofort laden; danach übernimmt _schedule_expiry_refresh
         self.update_price(None)
-        self.timer = rumps.Timer(self.update_price, 15 * 60)
-        self.timer.start()
+
+    def _schedule_expiry_refresh(self, end_timestamp_ms):
+        """Setzt einen einmaligen Timer, der genau beim Ablauf des aktuellen Preises feuert."""
+        with self._timer_lock:
+            if self._expiry_timer is not None:
+                self._expiry_timer.cancel()
+                self._expiry_timer = None
+
+            seconds_until_expiry = (end_timestamp_ms / 1000) - time.time()
+            if seconds_until_expiry <= 5:
+                return  # Preis läuft sofort ab oder ist bereits abgelaufen – kein Timer nötig
+
+            def _on_expiry():
+                with self._timer_lock:
+                    self._expiry_timer = None
+                self.update_price(None)
+
+            self._expiry_timer = threading.Timer(seconds_until_expiry, _on_expiry)
+            self._expiry_timer.daemon = True
+            self._expiry_timer.start()
+            logger.info("Expiry-Timer gesetzt: Aktualisierung in %.0f s", seconds_until_expiry)
+
+    def _schedule_retry(self):
+        """Setzt einen einmaligen Timer für einen erneuten Abrufversuch nach RETRY_INTERVAL_S."""
+        with self._timer_lock:
+            if self._expiry_timer is not None:
+                self._expiry_timer.cancel()
+                self._expiry_timer = None
+        t = threading.Timer(RETRY_INTERVAL_S, self.update_price, args=[None])
+        t.daemon = True
+        t.start()
+        logger.info("Retry geplant in %d s", RETRY_INTERVAL_S)
 
     @rumps.clicked("Jetzt aktualisieren")
     def manual_refresh(self, _):
@@ -125,11 +161,12 @@ class StrompreisApp(rumps.App):
     def update_price(self, _):
         """Holt den aktuellen Preis und aktualisiert Titel und Menü."""
         try:
-            raw, gross, valid_until = get_current_market_price()
+            raw, gross, valid_until, end_ts = get_current_market_price()
 
             if raw is None:
                 self.title = "⚡ n/a"
                 self.last_update_item.title = "Keine Daten verfügbar"
+                self._schedule_retry()
                 return
 
             # Titelleiste: reiner Börsenpreis
@@ -142,15 +179,24 @@ class StrompreisApp(rumps.App):
             self.gross_price_item.title = f"Bruttopreis (ca.): {gross:.2f} ct/kWh *"
             self.valid_until_item.title = f"Gültig bis: {valid_until} Uhr"
 
+            # Timer für den Ablauf des aktuellen Preises setzen
+            self._schedule_expiry_refresh(end_ts)
+
         except requests.exceptions.ConnectionError:
+            logger.error("API-Aufruf fehlgeschlagen: Keine Verbindung")
             self.title = "⚡ offline"
             self.last_update_item.title = "Fehler: Keine Verbindung"
+            self._schedule_retry()
         except requests.exceptions.Timeout:
+            logger.error("API-Aufruf fehlgeschlagen: Zeitüberschreitung")
             self.title = "⚡ timeout"
             self.last_update_item.title = "Fehler: Zeitüberschreitung"
+            self._schedule_retry()
         except Exception as e:
+            logger.error("Unerwarteter Fehler: %s", e)
             self.title = "⚡ Fehler"
             self.last_update_item.title = f"Fehler: {str(e)[:50]}"
+            self._schedule_retry()
 
 
 if __name__ == "__main__":
