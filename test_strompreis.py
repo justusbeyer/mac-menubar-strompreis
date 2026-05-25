@@ -1,6 +1,6 @@
 """
-Isolierter Test der API-Logik aus strompreis.py
-Läuft ohne macOS-GUI (kein rumps nötig).
+Isolated test of the API logic from strompreis.py.
+Runs without macOS GUI (no rumps required).
 """
 
 import requests
@@ -35,7 +35,7 @@ def get_current_market_price():
             ).strftime("%H:%M")
             return price_ct_kwh, price_gross, valid_until
 
-    # Fallback
+    # Fallback: use the latest entry
     entry = sorted(data, key=lambda x: x["start_timestamp"])[-1]
     price_eur_mwh = entry["marketprice"]
     price_ct_kwh  = price_eur_mwh / 10.0
@@ -53,16 +53,16 @@ def test_api_returns_data():
     assert raw is not None, "raw price is None"
     assert gross is not None, "gross price is None"
     assert valid_until is not None, "valid_until is None"
-    print(f"  Börsenpreis:   {raw:.2f} ct/kWh")
-    print(f"  Bruttopreis:   {gross:.2f} ct/kWh")
-    print(f"  Gültig bis:    {valid_until} Uhr")
+    print(f"  Wholesale price:   {raw:.2f} ct/kWh")
+    print(f"  Gross price:       {gross:.2f} ct/kWh")
+    print(f"  Valid until:       {valid_until} Uhr")
 
 
 def test_price_types():
     raw, gross, _ = get_current_market_price()
     assert isinstance(raw, float), f"raw should be float, got {type(raw)}"
     assert isinstance(gross, float), f"gross should be float, got {type(gross)}"
-    print(f"  Typen korrekt: raw={type(raw).__name__}, gross={type(gross).__name__}")
+    print(f"  Types correct: raw={type(raw).__name__}, gross={type(gross).__name__}")
 
 
 def test_price_plausibility():
@@ -70,26 +70,26 @@ def test_price_plausibility():
     assert raw is not None and gross is not None
     assert -50 < raw < 500, f"raw price out of plausible range: {raw}"
     assert 0 < gross < 600,  f"gross price out of plausible range: {gross}"
-    print(f"  Plausibilitätsprüfung bestanden: raw={raw:.2f}, gross={gross:.2f}")
+    print(f"  Plausibility check passed: raw={raw:.2f}, gross={gross:.2f}")
 
 
 def test_gross_greater_than_raw():
     raw, gross, _ = get_current_market_price()
     assert raw is not None and gross is not None
-    # gross = (raw + 20) * 1.19 — sollte immer > raw sein (bei positivem raw)
+    # gross = (raw + 20) * 1.19 — should always be > raw (for positive raw)
     if raw >= 0:
-        assert gross > raw, f"gross ({gross:.2f}) sollte > raw ({raw:.2f}) sein"
-    print(f"  Bruttopreis ({gross:.2f}) > Börsenpreis ({raw:.2f}): OK")
+        assert gross > raw, f"gross ({gross:.2f}) should be > raw ({raw:.2f})"
+    print(f"  Gross price ({gross:.2f}) > Wholesale price ({raw:.2f}): OK")
 
 
 def test_valid_until_format():
     _, _, valid_until = get_current_market_price()
     assert valid_until is not None
     parts = valid_until.split(":")
-    assert len(parts) == 2, f"Unerwartetes Format: {valid_until}"
+    assert len(parts) == 2, f"Unexpected format: {valid_until}"
     h, m = int(parts[0]), int(parts[1])
-    assert 0 <= h <= 23 and 0 <= m <= 59, f"Ungültige Uhrzeit: {valid_until}"
-    print(f"  Zeitformat korrekt: {valid_until}")
+    assert 0 <= h <= 23 and 0 <= m <= 59, f"Invalid time: {valid_until}"
+    print(f"  Time format correct: {valid_until}")
 
 
 def test_price_formula():
@@ -97,18 +97,18 @@ def test_price_formula():
     raw, gross, _ = get_current_market_price()
     assert raw is not None and gross is not None
     expected = (raw + SURCHARGE_CT_PER_KWH) * VAT_FACTOR
-    assert abs(gross - expected) < 0.001, f"Formel falsch: {gross} != {expected}"
-    print(f"  Formel korrekt: ({raw:.2f} + {SURCHARGE_CT_PER_KWH}) × {VAT_FACTOR} = {gross:.2f}")
+    assert abs(gross - expected) < 0.001, f"Formula incorrect: {gross} != {expected}"
+    print(f"  Formula correct: ({raw:.2f} + {SURCHARGE_CT_PER_KWH}) × {VAT_FACTOR} = {gross:.2f}")
 
 
 if __name__ == "__main__":
     tests = [
-        ("API liefert Daten",           test_api_returns_data),
-        ("Datentypen korrekt",          test_price_types),
-        ("Preisplausibilität",          test_price_plausibility),
-        ("Bruttopreis > Börsenpreis",   test_gross_greater_than_raw),
-        ("Zeitformat HH:MM",            test_valid_until_format),
-        ("Preisformel korrekt",         test_price_formula),
+        ("API returns data",              test_api_returns_data),
+        ("Correct types",                 test_price_types),
+        ("Price plausibility",            test_price_plausibility),
+        ("Gross price > wholesale price", test_gross_greater_than_raw),
+        ("Time format HH:MM",             test_valid_until_format),
+        ("Price formula correct",         test_price_formula),
     ]
 
     passed = 0
@@ -117,14 +117,14 @@ if __name__ == "__main__":
         print(f"\n[TEST] {name}")
         try:
             fn()
-            print(f"  -> BESTANDEN")
+            print(f"  -> PASSED")
             passed += 1
         except Exception as e:
-            print(f"  -> FEHLGESCHLAGEN: {e}")
+            print(f"  -> FAILED: {e}")
             failed += 1
 
     print(f"\n{'='*50}")
-    print(f"Ergebnis: {passed}/{len(tests)} Tests bestanden", end="")
-    print(f" | {failed} fehlgeschlagen" if failed else "")
+    print(f"Result: {passed}/{len(tests)} tests passed", end="")
+    print(f" | {failed} failed" if failed else "")
     print('='*50)
     exit(0 if failed == 0 else 1)
