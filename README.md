@@ -1,49 +1,49 @@
 # Strompreis Menubar App
 
-Eine macOS Menubar-Applikation, die den aktuellen Börsenstrompreis für Deutschland anzeigt.
-Der Preis wird beim Start geladen und danach automatisch zur vollen Stunde aktualisiert, sobald der angezeigte Preis seine Gültigkeit verliert.
+A macOS menubar application that displays the current wholesale electricity price for Germany.
+The price is loaded at startup and automatically refreshed each hour when the displayed price expires.
 
-## Datenquelle
+## Data Source
 
-[aWATTar API](https://api.awattar.de/v1/marketdata) — kostenlos, keine Registrierung erforderlich.  
-Der Börsenpreis entspricht dem EPEX Spot Day-Ahead-Preis in EUR/MWh.
+[aWATTar API](https://api.awattar.de/v1/marketdata) — free, no registration required.  
+The wholesale price corresponds to the EPEX Spot Day-Ahead price in EUR/MWh.
 
-## Preisberechnung
+## Price Calculation
 
-| Komponente | Wert |
+| Component | Value |
 |---|---|
-| Börsenpreis | variabel (stündlich) |
-| Aufschlag (Netz, Umlagen) | ~20 ct/kWh |
-| MwSt. | 19 % |
+| Wholesale price | variable (hourly) |
+| Surcharge (grid, levies) | ~20 ct/kWh |
+| VAT | 19% |
 
-> Der angezeigte **Bruttopreis** ist ein Näherungswert. Der tatsächliche Preis hängt von deinem Tarif und Netzgebiet ab.
+> The displayed **gross price** is an approximation. The actual price depends on your tariff and grid area.
 
 ## Installation
 
-### Voraussetzungen
+### Prerequisites
 
 - macOS
 - Python 3.9+
 - make
 
-### App-Bundle bauen (empfohlen)
+### Build app bundle (recommended)
 
 ```bash
 cd mac-menubar-strompreis
 make
 ```
 
-Das Bundle wird unter `dist/Strompreis.app` abgelegt und kann von dort per Doppelklick gestartet oder nach `/Applications/` verschoben werden.
+The bundle is created at `dist/Strompreis.app` and can be launched by double-clicking from there or moved to `/Applications/`.
 
-### Makefile-Befehle
+### Makefile commands
 
-| Befehl | Beschreibung |
+| Command | Description |
 |---|---|
-| `make` / `make build` | Virtuelle Umgebung einrichten und `dist/Strompreis.app` bauen |
-| `make venv` | Nur virtuelle Umgebung und Abhängigkeiten installieren |
-| `make clean` | `build/`, `dist/` und `.venv/` löschen |
+| `make` / `make build` | Create virtual environment and build `dist/Strompreis.app` |
+| `make venv` | Only create virtual environment and install dependencies |
+| `make clean` | Delete `build/`, `dist/`, and `.venv/` |
 
-### Skript direkt starten (ohne Bundle)
+### Run script directly (without bundle)
 
 ```bash
 cd mac-menubar-strompreis
@@ -53,24 +53,24 @@ pip install -r requirements.txt
 python3 strompreis.py
 ```
 
-## Autostart beim Login (optional)
+## Autostart at login (optional)
 
-Einen LaunchAgent einrichten, damit die App beim Login automatisch startet:
+Set up a LaunchAgent to start the app automatically at login:
 
 ```bash
-# Pfade anpassen!
+# Adjust paths!
 cp de.strompreis.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/de.strompreis.plist
 ```
 
-Vor dem Kopieren die Pfade in `de.strompreis.plist` anpassen:
-- `/PFAD/ZU/.venv/bin/python3` → dein Python-Interpreter
-- `/PFAD/ZU/mac-menubar-strompreis/strompreis.py` → Speicherort der App
+Before copying, adjust the paths in `de.strompreis.plist`:
+- `/PATH/TO/.venv/bin/python3` → your Python interpreter
+- `/PATH/TO/mac-menubar-strompreis/strompreis.py` → location of the app
 
-## Menü
+## Menu
 
 ```
-⚡ 8,1ct/kWh             ← Börsenpreis in der Menüleiste
+⚡ 8,1ct/kWh             ← Wholesale price in the menu bar
 ─────────────────────────
 Aktualisiert: 31.03.2026 14:00
 ─────────────────────────
@@ -84,6 +84,6 @@ Jetzt aktualisieren
 Beenden
 ```
 
-## Lizenz
+## License
 
 GPLv3
