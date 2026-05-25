@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Strompreis Menubar App für macOS
-Zeigt den aktuellen Börsenstrompreis für Deutschland (EPEX Spot) in der Menüleiste an.
-Der Preis wird beim Start geladen und danach jeweils zur vollen Stunde aktualisiert,
-wenn der angezeigte Preis seine Gültigkeit verliert.
-Datenquelle: aWATTar API (kostenlos, keine Registrierung nötig)
+Strompreis menubar app for macOS.
+Displays the current wholesale electricity price for Germany (EPEX Spot) in the menu bar.
+The price is loaded at startup and then refreshed each hour when the displayed price expires.
+Data source: aWATTar API (free, no registration required)
 """
 
 import rumps
@@ -14,13 +13,12 @@ import threading
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import time
-import threading
 from PyObjCTools import AppHelper
 from AppKit import NSThread
 
 
 def _run_on_main_thread(func):
-    """Führt func auf dem Main-Thread aus und wartet auf Abschluss."""
+    """Execute func on the main thread and wait for completion."""
     if NSThread.isMainThread():
         func()
         return
@@ -47,23 +45,23 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://api.awattar.de/v1/marketdata"
 
-# Aufschläge und Steuern (beispielhaft, Stand 2024)
-# Netzentgelt + Umlagen + Steuern ca. 20 ct/kWh zusätzlich zum Börsenpreis
-# Der Börsenpreis wird in EUR/MWh geliefert → Umrechnung in ct/kWh: / 10
-SURCHARGE_CT_PER_KWH = 20.0  # Aufschlag in Cent/kWh (Netz, Umlagen, Steuern)
+# Surcharges and taxes (illustrative, as of 2024)
+# Grid fees + levies + taxes approx. 20 ct/kWh in addition to the wholesale price
+# Wholesale price is delivered in EUR/MWh -> conversion to ct/kWh: / 10
+SURCHARGE_CT_PER_KWH = 20.0  # surcharge in cent/kWh (grid, levies, taxes)
 VAT_FACTOR = 1.19             # Mehrwertsteuer 19 %
 
 
 def get_current_market_price():
     """
-    Ruft den aktuellen stündlichen Börsenpreis von der aWATTar-API ab.
-    Gibt Nettopreis (ct/kWh), Bruttopreis (ct/kWh), Gültigkeitsende als
-    Zeitstring sowie den End-Timestamp in Millisekunden zurück.
+    Fetch the current hourly wholesale price from the aWATTar API.
+    Returns net price (ct/kWh), gross price (ct/kWh), validity end as
+    time string, and the end timestamp in milliseconds.
     """
     now_ms = int(time.time() * 1000)
     params = {
-        "start": now_ms - 3600 * 1000,  # eine Stunde zurück
-        "end":   now_ms + 3600 * 1000,  # eine Stunde voraus
+        "start": now_ms - 3600 * 1000,  # one hour ago
+        "end":   now_ms + 3600 * 1000,  # one hour ahead
     }
     resp = requests.get(API_URL, params=params, timeout=10)
     logger.info("GET %s – HTTP %s", API_URL, resp.status_code)
@@ -73,7 +71,7 @@ def get_current_market_price():
     if not data:
         return None, None, None, None
 
-    # Den Eintrag finden, in dessen Zeitfenster der aktuelle Zeitpunkt fällt
+    # Find the entry whose time window contains the current moment
     for entry in data:
         if entry["start_timestamp"] <= now_ms < entry["end_timestamp"]:
             price_eur_mwh = entry["marketprice"]
@@ -98,7 +96,7 @@ def get_current_market_price():
     return price_ct_kwh, price_gross, valid_until, entry["end_timestamp"]
 
 
-RETRY_INTERVAL_S = 3 * 60  # Wartezeit nach einem fehlgeschlagenen API-Aufruf
+RETRY_INTERVAL_S = 3 * 60  # wait time after a failed API call
 
 
 class StrompreisApp(rumps.App):
@@ -109,7 +107,7 @@ class StrompreisApp(rumps.App):
             quit_button=None,
         )
 
-        # Menüeinträge
+        # Menu items
         self.last_update_item = rumps.MenuItem("Letzte Aktualisierung: –")
         self.raw_price_item   = rumps.MenuItem("Börsenpreis: –")
         self.gross_price_item = rumps.MenuItem("Bruttopreis (ca.): –")
@@ -137,15 +135,15 @@ class StrompreisApp(rumps.App):
             self.quit_item,
         ]
 
-        self._expiry_timer = None  # einmaliger Timer zum Preisablauf
-        self._retry_timer = None  # Retry-Timer für Fehlerfälle
-        self._timer_lock = threading.Lock()  # schützt _expiry_timer und _retry_timer vor Race Conditions
+        self._expiry_timer = None  # one-shot timer for price expiry
+        self._retry_timer = None  # retry timer for error cases
+        self._timer_lock = threading.Lock()  # protects _expiry_timer and _retry_timer from race conditions
 
-        # Beim Start sofort laden; danach übernimmt _schedule_expiry_refresh
+        # Load immediately at startup; _schedule_expiry_refresh handles subsequent updates
         self.update_price(None)
 
     def _schedule_expiry_refresh(self, end_timestamp_ms):
-        """Setzt einen einmaligen Timer, der genau beim Ablauf des aktuellen Preises feuert."""
+        """Schedule a one-shot timer that fires exactly when the current price expires."""
         with self._timer_lock:
             if self._expiry_timer is not None:
                 self._expiry_timer.cancel()
@@ -153,7 +151,7 @@ class StrompreisApp(rumps.App):
 
             seconds_until_expiry = (end_timestamp_ms / 1000) - time.time()
             if seconds_until_expiry <= 0:
-                # Preis ist bereits abgelaufen – sofort aktualisieren
+                # Price already expired - refresh immediately
                 self.update_price(None)
                 return
 
@@ -171,7 +169,7 @@ class StrompreisApp(rumps.App):
             logger.info("Expiry-Timer gesetzt: Aktualisierung in %.0f s", seconds_until_expiry)
 
     def _schedule_retry(self):
-        """Setzt einen einmaligen Timer für einen erneuten Abrufversuch nach RETRY_INTERVAL_S."""
+        """Schedule a one-shot timer for a retry attempt after RETRY_INTERVAL_S."""
         with self._timer_lock:
             if self._expiry_timer is not None:
                 self._expiry_timer.cancel()
@@ -193,7 +191,7 @@ class StrompreisApp(rumps.App):
         self.update_price(None)
 
     def update_price(self, _):
-        """Holt den aktuellen Preis und aktualisiert Titel und Menü."""
+        """Fetch the current price and update title and menu."""
         try:
             raw, gross, valid_until, end_ts = get_current_market_price()
 
@@ -203,7 +201,7 @@ class StrompreisApp(rumps.App):
                 self._schedule_retry()
                 return
 
-            # Titelleiste: reiner Börsenpreis
+            # Menu bar title: pure wholesale price
             raw_rounded = str(Decimal(str(raw)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)).replace(".", ",")
 
             def _apply_success():
