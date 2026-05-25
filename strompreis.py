@@ -16,10 +16,15 @@ from decimal import Decimal, ROUND_HALF_UP
 import time
 import threading
 from PyObjCTools import AppHelper
+from AppKit import NSThread
 
 
 def _run_on_main_thread(func):
     """Führt func auf dem Main-Thread aus und wartet auf Abschluss."""
+    if NSThread.isMainThread():
+        func()
+        return
+
     done = threading.Event()
 
     def _wrapper():
