@@ -3,7 +3,7 @@ from setuptools import setup
 APP = ["strompreis.py"]
 DATA_FILES = []
 OPTIONS = {
-    "argv_emulation": False,   # bei Menubar-Apps muss dies False sein
+    "argv_emulation": False,   # must be False for menubar apps
     "iconfile": None,
     "plist": {
         "CFBundleName": "Strompreis",
@@ -11,7 +11,7 @@ OPTIONS = {
         "CFBundleIdentifier": "de.strompreis",
         "CFBundleVersion": "1.0.0",
         "CFBundleShortVersionString": "1.0.0",
-        # Kein Dock-Icon, nur Menüleiste
+        # No dock icon, menubar only
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
     },
