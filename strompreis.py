@@ -14,6 +14,22 @@ import threading
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import time
+import threading
+from PyObjCTools import AppHelper
+
+
+def _run_on_main_thread(func):
+    """Führt func auf dem Main-Thread aus und wartet auf Abschluss."""
+    done = threading.Event()
+
+    def _wrapper():
+        try:
+            func()
+        finally:
+            done.set()
+
+    AppHelper.callAfter(_wrapper)
+    done.wait()
 
 
 logging.basicConfig(
@@ -117,7 +133,8 @@ class StrompreisApp(rumps.App):
         ]
 
         self._expiry_timer = None  # einmaliger Timer zum Preisablauf
-        self._timer_lock = threading.Lock()  # schützt _expiry_timer vor Race Conditions
+        self._retry_timer = None  # Retry-Timer für Fehlerfälle
+        self._timer_lock = threading.Lock()  # schützt _expiry_timer und _retry_timer vor Race Conditions
 
         # Beim Start sofort laden; danach übernimmt _schedule_expiry_refresh
         self.update_price(None)
@@ -130,12 +147,17 @@ class StrompreisApp(rumps.App):
                 self._expiry_timer = None
 
             seconds_until_expiry = (end_timestamp_ms / 1000) - time.time()
-            if seconds_until_expiry <= 5:
-                return  # Preis läuft sofort ab oder ist bereits abgelaufen – kein Timer nötig
+            if seconds_until_expiry <= 0:
+                # Preis ist bereits abgelaufen – sofort aktualisieren
+                self.update_price(None)
+                return
 
             def _on_expiry():
                 with self._timer_lock:
                     self._expiry_timer = None
+                    if self._retry_timer is not None:
+                        self._retry_timer.cancel()
+                        self._retry_timer = None
                 self.update_price(None)
 
             self._expiry_timer = threading.Timer(seconds_until_expiry, _on_expiry)
@@ -149,13 +171,20 @@ class StrompreisApp(rumps.App):
             if self._expiry_timer is not None:
                 self._expiry_timer.cancel()
                 self._expiry_timer = None
-        t = threading.Timer(RETRY_INTERVAL_S, self.update_price, args=[None])
-        t.daemon = True
-        t.start()
-        logger.info("Retry geplant in %d s", RETRY_INTERVAL_S)
+            if self._retry_timer is not None:
+                self._retry_timer.cancel()
+                self._retry_timer = None
+            self._retry_timer = threading.Timer(RETRY_INTERVAL_S, self.update_price, args=[None])
+            self._retry_timer.daemon = True
+            self._retry_timer.start()
+            logger.info("Retry geplant in %d s", RETRY_INTERVAL_S)
 
     @rumps.clicked("Jetzt aktualisieren")
     def manual_refresh(self, _):
+        with self._timer_lock:
+            if self._retry_timer is not None:
+                self._retry_timer.cancel()
+                self._retry_timer = None
         self.update_price(None)
 
     def update_price(self, _):
@@ -164,38 +193,39 @@ class StrompreisApp(rumps.App):
             raw, gross, valid_until, end_ts = get_current_market_price()
 
             if raw is None:
-                self.title = "⚡ n/a"
-                self.last_update_item.title = "Keine Daten verfügbar"
+                _run_on_main_thread(lambda: setattr(self, 'title', "⚡ n/a"))
+                _run_on_main_thread(lambda: setattr(self.last_update_item, 'title', "Keine Daten verfügbar"))
                 self._schedule_retry()
                 return
 
             # Titelleiste: reiner Börsenpreis
             raw_rounded = str(Decimal(str(raw)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)).replace(".", ",")
-            self.title = f"⚡ {raw_rounded}ct/kWh"
 
-            now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-            self.last_update_item.title = f"Aktualisiert: {now_str}"
-            self.raw_price_item.title   = f"Börsenpreis: {raw:.2f} ct/kWh"
-            self.gross_price_item.title = f"Bruttopreis (ca.): {gross:.2f} ct/kWh *"
-            self.valid_until_item.title = f"Gültig bis: {valid_until} Uhr"
+            def _apply_success():
+                self.title = f"⚡ {raw_rounded}ct/kWh"
+                now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+                self.last_update_item.title = f"Aktualisiert: {now_str}"
+                self.raw_price_item.title   = f"Börsenpreis: {raw:.2f} ct/kWh"
+                self.gross_price_item.title = f"Bruttopreis (ca.): {gross:.2f} ct/kWh *"
+                self.valid_until_item.title = f"Gültig bis: {valid_until} Uhr"
+                self._schedule_expiry_refresh(end_ts)
 
-            # Timer für den Ablauf des aktuellen Preises setzen
-            self._schedule_expiry_refresh(end_ts)
+            _run_on_main_thread(_apply_success)
 
         except requests.exceptions.ConnectionError:
             logger.error("API-Aufruf fehlgeschlagen: Keine Verbindung")
-            self.title = "⚡ offline"
-            self.last_update_item.title = "Fehler: Keine Verbindung"
+            _run_on_main_thread(lambda: setattr(self, 'title', "⚡ offline"))
+            _run_on_main_thread(lambda: setattr(self.last_update_item, 'title', "Fehler: Keine Verbindung"))
             self._schedule_retry()
         except requests.exceptions.Timeout:
             logger.error("API-Aufruf fehlgeschlagen: Zeitüberschreitung")
-            self.title = "⚡ timeout"
-            self.last_update_item.title = "Fehler: Zeitüberschreitung"
+            _run_on_main_thread(lambda: setattr(self, 'title', "⚡ timeout"))
+            _run_on_main_thread(lambda: setattr(self.last_update_item, 'title', "Fehler: Zeitüberschreitung"))
             self._schedule_retry()
         except Exception as e:
             logger.error("Unerwarteter Fehler: %s", e)
-            self.title = "⚡ Fehler"
-            self.last_update_item.title = f"Fehler: {str(e)[:50]}"
+            _run_on_main_thread(lambda: setattr(self, 'title', "⚡ Fehler"))
+            _run_on_main_thread(lambda: setattr(self.last_update_item, 'title', f"Fehler: {str(e)[:50]}"))
             self._schedule_retry()
 
 
